@@ -7,7 +7,7 @@
 # <http://docs.atlassian.com/software/jira/docs/api/rpc-jira-plugin/latest/com/atlassian/jira/rpc/xmlrpc/XmlRpcService.html>
 #
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 import warnings
 warnings.filterwarnings("ignore", module="wstools.XMLSchema", lineno=3107)
@@ -1316,6 +1316,11 @@ class JiraShell(cmdln.Cmdln):
              "to list them. Some Jira projects require a component and don't "
              "have a default, but jirash can't detect that so doesn't know "
              "when to require a component.")
+    @cmdln.option("-e", dest="editor",
+        help="Edit issue summary/description in your editor.")
+    @cmdln.option("-E", dest="editor_template",
+        help="Template to use for editing issue summary/description. "
+            "Implies '-e'.")
     @cmdln.option("-B", "--no-browse", action="store_true",
         help="Do *not* attempt to open the browser to the created issue.")
     def do_createissue(self, subcmd, opts, project_key, *summary):
@@ -1358,7 +1363,9 @@ class JiraShell(cmdln.Cmdln):
             # Hardcoded to '1' for bwcompat. This is "Bug" in Joyent's Jira.
             data["type"] = 1
 
-        use_editor = self.cfg.get("createissue_use_editor", False)
+        use_editor = (opts.editor is not None
+            or opts.editor_template is not None
+            or self.cfg.get("createissue_use_editor", False))
 
         if summary:
             summary = u' '.join(summary)
@@ -1371,7 +1378,7 @@ class JiraShell(cmdln.Cmdln):
         if opts.assignee:
             assignee = opts.assignee
         elif use_editor:
-            assignee = "me"
+            assignee = None
         else:
             assignee = query(
                 "Assignee (blank for default, 'me' for yourself)")
@@ -1407,6 +1414,8 @@ class JiraShell(cmdln.Cmdln):
 #
 # Leading lines starting with '#' are dropped.
 """
+            if opts.editor_template:
+                text = codecs.open(opts.editor_template, 'r', 'utf8').read()
             cursor_line = 10
             if summary:
                 text += summary + '\n\n\n'
@@ -1433,7 +1442,20 @@ class JiraShell(cmdln.Cmdln):
         data["summary"] = summary.encode('utf-8')
         data["description"] = description.encode('utf-8')
 
-        issue = self.jira.create_issue(data)
+        try:
+            issue = self.jira.create_issue(data)
+        except:
+            if use_editor:
+                # Save 'text' out so it isn't all lost data.
+                save_file = '%s-NNN.%d.jirash' % (project_key, int(time.time()))
+                fout = codecs.open(save_file, 'w', 'utf8')
+                fout.write(text)
+                fout.close()
+                sys.stderr.write(
+                    'Note: Your edits have been saved to %s, reload with:\n'
+                    '    jirash createissue -E %s ...\n'
+                    % (save_file, save_file))
+            raise
         print "created:", self._issue_repr_flat(issue)
         no_browse = (opts.no_browse
             or self.cfg.get("createissue_no_browse", False))
