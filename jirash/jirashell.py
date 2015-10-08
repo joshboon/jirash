@@ -1243,7 +1243,7 @@ class JiraShell(cmdln.Cmdln):
         date_fmt = '%Y-%m-%d'
         releases = self.jira.latest_releases(projects)
         target_date = (
-            datetime.strptime(opts.date)
+            datetime.strptime(opts.date, date_fmt)
             if opts.date
             else datetime.today()
         ).date()
