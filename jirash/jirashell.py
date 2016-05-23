@@ -1296,7 +1296,7 @@ class JiraShell(cmdln.Cmdln):
                                '%s/browse/%s' % (self.jira_url, issue["key"]),
                                issue["fields"]["summary"]))
                 output += '\n'
-            output += '\n\n- - -\n'
+            output += '\n\n- - -\n\n'
         print(output)
 
     @cmdln.option("-j", "--json", action="store_true", help="JSON output")
