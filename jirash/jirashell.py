@@ -15,6 +15,7 @@ warnings.filterwarnings("ignore", module="wstools.XMLSchema", lineno=3107)
 #   /opt/local/lib/python2.6/xmlrpclib.py:612: DeprecationWarning: The xmllib module is obsolete.
 warnings.filterwarnings("ignore", module="xmlrpclib", lineno=612)
 
+import cookielib
 import getpass
 import os
 import sys
@@ -85,6 +86,8 @@ def _isint(s):
 #---- Jira API
 
 class Jira(object):
+    AUTH_URL = '/rest/auth/1/session'
+
     def __init__(self, jira_url, username, password, options):
         self.jira_url = jira_url
         self.username = username
@@ -104,7 +107,7 @@ class Jira(object):
         self.auth = self.server.jira1.login(username, password)
 
         # init a requests session and set verify (context is not yet supported)
-        self.requests_session = requests.Session()
+        self.requests_session = self._build_cookie_session()
         if 'verify_mode' in (options.get('ssl_context') or ''):
             if options['ssl_context']['verify_mode'] == 'CERT_NONE':
                 self.requests_session.verify = False
@@ -119,6 +122,25 @@ class Jira(object):
 
     _soap_server = None
     _soap_auth = None
+
+    def _build_cookie_session(self):
+        """ Post to login url and store cookie in session for all requests """
+        fname = os.path.expanduser("~/.jirash.cookies")
+        session = requests.Session()
+        session.cookies = cookielib.FileCookieJar(filename=fname)
+        url = self.jira_url + self.AUTH_URL
+        res = session.post(url, json=dict(username=self.username,
+                                          password=self.password))
+        if not res:
+            if res.status_code == 401:
+                raise JiraShellError('Auth Error: %s', res)
+            elif res.status_code >= 500:
+                logging.error('Error in request to %s: %s', url,
+                              res, exc_info=True)
+                raise JiraShellError('Internal Error')
+            raise JiraShellError('Error Response: %s', res)
+        return session
+
     def _get_soap_server(self):
         try:
             import pyexpat
@@ -165,8 +187,8 @@ class Jira(object):
         - headers
         """
         url = self.jira_url + '/rest/api/2' + path
-        r = self.requests_session.request(method, url, auth=(self.username, self.password),
-                **kwargs)
+        log.debug('Sending HTTP request %s to %s', method, url)
+        r = self.requests_session.request(method, url, **kwargs)
         return r
 
     def filters(self):
@@ -409,6 +431,7 @@ class Jira(object):
 
             url = "/search/?jql=%s&maxResults=%s&expand=%s&fields=%s" % (
                 ' AND '.join(query), BIG, expand or '', fields)
+            log.debug('Searching using URL: %s', url)
             res = self._jira_rest_call("GET", url)
             if res.status_code != 200:
                 raise JiraShellError("error searching: %s"
