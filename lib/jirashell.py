@@ -254,6 +254,38 @@ class Jira(object):
             self.cache["issue_transitions"] = res.json()["transitions"]
         return self.cache["issue_transitions"]
 
+    def comment(self, key, data):
+        """
+        Transition the issue from it's current status to another. The
+        status must be supported in the the transition flow.
+
+        More details here: https://docs.atlassian.com/jira/REST/latest/#d2e4056
+
+        data may be an update/fields dict such as:
+        {
+            "update": {
+                "comment": [
+                    {
+                        "add": {
+                            "body": "Bug has been fixed."
+                        }
+                    }
+                ]
+            },
+            "fields": {
+                "resolution": {
+                    "name": "Closed"
+                }
+            },
+            "historyMetadata": { ... }
+        }
+        """
+        data = data or {}
+        res = self._jira_rest_call(
+            'POST', "/issue/%s/comment" % key,
+            headers={'content-type': 'application/json'},
+            data=json.dumps(data))
+
     def transition(self, key, new_status, data):
         """
         Transition the issue from it's current status to another. The
@@ -1156,6 +1188,33 @@ class JiraShell(cmdln.Cmdln):
         self.jira.transition(key, status, data)
         print "Transitioned: %s %s" % (key, status_name)
 
+    def do_comment(self, subcmd, opts, *args):
+        """comment on issue
+
+
+        Usage:
+            ${cmd_name} <issue> "<comment>"
+
+        ${cmd_option_list}
+        `<status>` is either a "transition" id or name from this Jira's issue
+        transitions (list with `jirash transitions`).
+
+        Examples:
+            jirash transition MON-123 "In Progress"
+            jirash transition OS-2000 Closed -r "Duplicate" -c "dupe of OS-1999
+            jirash transition IMGAPI-123 Resolved --data='{
+                "update": { "add": { "fixVersions": {...}}}
+            }'
+        """
+        if len(args) < 2:
+            raise JiraShellError('not enough arguments: %s' % ' '.join(args))
+        key = args[0]
+        comment = args[1]
+
+        data = {"body": comment }
+        self.jira.comment(key, data)
+        print "Commented: %s %s" % (key, data)
+
     @cmdln.option("-p", "--project", dest="project_key",
         help="Project for which to get issue types.")
     @cmdln.option("-j", "--json", action="store_true", help="JSON output")
@@ -1300,6 +1359,8 @@ class JiraShell(cmdln.Cmdln):
     #TODO: attachments?
     @cmdln.option("-d", "--description",
         help="issue description. If not given, this will prompt.")
+    @cmdln.option("-P", "--parent",
+        help="issue description. If not given, this will prompt.")
     @cmdln.option("-t", "--type",
         help="Issue type or a case-insensitive substring match against valid "
              "issue types for the given project. This defaults to `1` for "
@@ -1330,9 +1391,37 @@ class JiraShell(cmdln.Cmdln):
             ${cmd_name} PROJECT-KEY [SUMMARY]
 
         ${cmd_option_list}
+        data = {"transition": {"id": status}}
+        if opts.data:
+            data.update(json.loads(opts.data))
+        if opts.comment:
+            if "update" not in data:
+                data["update"] = {}
+            data["update"]["comment"] = [{"add": {"body": opts.comment}}]
+        if opts.resolution:
+            resolutions = [r["name"] for r in self.jira.resolutions()]
+            if opts.resolution not in resolutions:
+                raise JiraShellError('Invalid resolution: %s' % opts.resolution)
+            if "fields" not in data:
+                data["fields"] = {}
+            data["fields"]["resolution"] = {"name": opts.resolution}
+        if opts.time:
+            # TOOD: Test this works
+            if "update" not in data:
+                data["update"] = {}
+            data["update"]["worklog"] = {
+                "worklogs": [{"add": {
+                    "timeSpentSeconds": self.jira.issue_total_work_time(key)}}]
+            }
+
+        self.jira.transition(key, status, data)
+        print "Transitioned: %s %s" % (key, status_name)
+
         """
-        data = {
-            "project": project_key,
+        data = {}
+        data["fields"] = {
+
+            "project": {'key': project_key},
         }
 
         if opts.type:
@@ -1361,7 +1450,7 @@ class JiraShell(cmdln.Cmdln):
                             "types" % (project_key, opts.type, project_key))
         else:
             # Hardcoded to '1' for bwcompat. This is "Bug" in Joyent's Jira.
-            data["type"] = 1
+            data["fields"]["issuetype"] = {"id":"1"}
 
         use_editor = (opts.editor is not None
             or opts.editor_template is not None
@@ -1375,6 +1464,13 @@ class JiraShell(cmdln.Cmdln):
         else:
             summary = None
 
+        if opts.parent:
+            parent = opts.parent
+            data["fields"]["parent"] = {"key": parent}
+            data["fields"]["issuetype"] = { "id" : "7" }
+        else:
+            parent = None
+        
         if opts.assignee:
             assignee = opts.assignee
         elif use_editor:
@@ -1384,9 +1480,9 @@ class JiraShell(cmdln.Cmdln):
                 "Assignee (blank for default, 'me' for yourself)")
         if assignee:
             if assignee == "me":
-                data["assignee"] = self.cfg[self.jira_url]["username"]
+                data["fields"]["assignee"] = {"name": self.cfg[self.jira_url]["username"]}
             else:
-                data["assignee"] = assignee
+                data["fields"]["assignee"] = {"name": assignee }
 
         if opts.components:
             component_ids = [self.jira.component_id(project_key, s)
@@ -1439,11 +1535,15 @@ class JiraShell(cmdln.Cmdln):
                 sys.stderr.write('error: content is not "SUMMARY\\n\\nDESCRIPTION"\n')
                 raw_input("Press any key to re-edit...")
 
-        data["summary"] = summary.encode('utf-8')
-        data["description"] = description.encode('utf-8')
-
+        data["fields"]["summary"] = summary.encode('utf-8')
+        data["fields"]["description"] = description.encode('utf-8')
+        print data
         try:
-            issue = self.jira.create_issue(data)
+            issue = self.jira._jira_rest_call(
+            'POST', "/issue",
+            headers={'content-type': 'application/json'},
+            data=json.dumps(data))
+            return issue.json()
         except:
             if use_editor:
                 # Save 'text' out so it isn't all lost data.
