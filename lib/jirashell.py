@@ -1195,16 +1195,8 @@ class JiraShell(cmdln.Cmdln):
         Usage:
             ${cmd_name} <issue> "<comment>"
 
-        ${cmd_option_list}
-        `<status>` is either a "transition" id or name from this Jira's issue
-        transitions (list with `jirash transitions`).
-
         Examples:
-            jirash transition MON-123 "In Progress"
-            jirash transition OS-2000 Closed -r "Duplicate" -c "dupe of OS-1999
-            jirash transition IMGAPI-123 Resolved --data='{
-                "update": { "add": { "fixVersions": {...}}}
-            }'
+            jirash comment MON-123 "Long live the king!"
         """
         if len(args) < 2:
             raise JiraShellError('not enough arguments: %s' % ' '.join(args))
@@ -1360,7 +1352,9 @@ class JiraShell(cmdln.Cmdln):
     @cmdln.option("-d", "--description",
         help="issue description. If not given, this will prompt.")
     @cmdln.option("-P", "--parent",
-        help="issue description. If not given, this will prompt.")
+        help="If provided sets type to sub-task and adds it as subtask to specified ticket")
+    @cmdln.option("-p", "--priority",
+        help="Takes word value i.e. Critical Blocker etc")
     @cmdln.option("-t", "--type",
         help="Issue type or a case-insensitive substring match against valid "
              "issue types for the given project. This defaults to `1` for "
@@ -1389,34 +1383,6 @@ class JiraShell(cmdln.Cmdln):
 
         Usage:
             ${cmd_name} PROJECT-KEY [SUMMARY]
-
-        ${cmd_option_list}
-        data = {"transition": {"id": status}}
-        if opts.data:
-            data.update(json.loads(opts.data))
-        if opts.comment:
-            if "update" not in data:
-                data["update"] = {}
-            data["update"]["comment"] = [{"add": {"body": opts.comment}}]
-        if opts.resolution:
-            resolutions = [r["name"] for r in self.jira.resolutions()]
-            if opts.resolution not in resolutions:
-                raise JiraShellError('Invalid resolution: %s' % opts.resolution)
-            if "fields" not in data:
-                data["fields"] = {}
-            data["fields"]["resolution"] = {"name": opts.resolution}
-        if opts.time:
-            # TOOD: Test this works
-            if "update" not in data:
-                data["update"] = {}
-            data["update"]["worklog"] = {
-                "worklogs": [{"add": {
-                    "timeSpentSeconds": self.jira.issue_total_work_time(key)}}]
-            }
-
-        self.jira.transition(key, status, data)
-        print "Transitioned: %s %s" % (key, status_name)
-
         """
         data = {}
         data["fields"] = {
@@ -1429,20 +1395,20 @@ class JiraShell(cmdln.Cmdln):
             # First try exact match.
             for it in issue_types:
                 if it["name"] == opts.type:
-                    data["type"] = int(it["id"])
+                    data["fields"]["issuetype"] = {"id": it["id"] }
                     break
             else:
                 # Try case-insensitive full match.
                 for it in issue_types:
                     if it["name"].lower() == opts.type.lower():
-                        data["type"] = int(it["id"])
+                        data["fields"]["issuetype"] = {"id": it["id"] }
                         break
                 else:
                     # Try case-insensitive substring match (require unique).
                     matches = [it for it in issue_types if
                         opts.type.lower() in it["name"].lower()]
                     if len(matches) == 1:
-                        data["type"] = int(matches[0]["id"])
+                        data["fields"]["issuetype"] = {"id": matches[0]["id"] }
                     else:
                         raise JiraShellError(
                             "no issue types for project %s match '%s', use "
@@ -1464,6 +1430,10 @@ class JiraShell(cmdln.Cmdln):
         else:
             summary = None
 
+        if opts.priority:
+            priority = opts.priority
+            data["fields"]["priority"] = { "name": priority }
+        
         if opts.parent:
             parent = opts.parent
             data["fields"]["parent"] = {"key": parent}
