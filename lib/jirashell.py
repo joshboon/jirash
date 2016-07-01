@@ -1361,6 +1361,12 @@ class JiraShell(cmdln.Cmdln):
              "bwcompat reasons, which "
              "in Joyent's Jira is 'Bug'. Use `jirash issuetypes -p "
              "PROJECT-NAME` to list valid issue types for a project.")
+    @cmdln.option("-w", "--watcher", dest="watchers", action="append",
+        metavar="WATCHER",
+        help="watcher username. Note that this is the username field, "
+             "NOT their full name. (XXX Don't have a good way to list "
+             "available usernames right now.)"
+             "Can specify -w bob -w joe -w sally for multi")
     @cmdln.option("-a", "--assignee",
         help="Assignee username. Note that this is the username field, "
              "NOT their full name. (XXX Don't have a good way to list "
@@ -1454,6 +1460,10 @@ class JiraShell(cmdln.Cmdln):
             else:
                 data["fields"]["assignee"] = {"name": assignee }
 
+        if opts.watchers:
+            watchers = opts.watchers
+            data["fields"]["customfield_12301"] = [{"name": watcher} for watcher in watchers]
+        
         if opts.components:
             component_ids = [self.jira.component_id(project_key, s)
                 for s in opts.components]
